@@ -2,7 +2,7 @@
 
 A professional Asset-Liability Management (ALM) tool for defined benefit pension funds, built in Python.
 
-**Live App:** [pension-alm.streamlit.app](https://pension-alm.streamlit.app) *(deploy to update link)*
+**Live App:** https://pension-alm-u4usgpvtagddncv6qoamru.streamlit.app/
 
 ---
 
