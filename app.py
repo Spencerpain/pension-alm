@@ -6,7 +6,7 @@ import matplotlib.ticker as mticker
 
 from yield_curve import (
     default_goc_params, nelson_siegel_spot, apply_scenario,
-    GOC_MATURITIES, GOC_YIELDS, SCENARIOS, curve_dataframe,
+    SCENARIOS, curve_dataframe,
 )
 from liabilities import (
     generate_pension_cashflows, pv_cashflows, liability_pv,
@@ -92,6 +92,14 @@ tabs = st.tabs([
 with tabs[0]:
     st.subheader('Nelson-Siegel Yield Curve — Government of Canada')
 
+    if base_params.get('live'):
+        st.success(f"Live GoC yields from Bank of Canada — as of {base_params['as_of']}")
+    else:
+        st.warning(f"Bank of Canada API unavailable — using fallback curve ({base_params['as_of']})")
+
+    obs_mats   = base_params.get('_maturities', np.array([]))
+    obs_yields = base_params.get('_yields',     np.array([]))
+
     col1, col2 = st.columns([3, 1])
     with col1:
         fine_mats = np.linspace(0.25, 30, 200)
@@ -105,7 +113,9 @@ with tabs[0]:
                   'Flattener': ('darkorange', 1.5, ':')}
         for sc, (color, lw, ls) in styles.items():
             ax.plot(fine_mats, curve_df[sc] * 100, color=color, lw=lw, ls=ls, label=sc)
-        ax.scatter(GOC_MATURITIES, GOC_YIELDS * 100, color='black', zorder=5, s=40, label='GoC observed')
+        if len(obs_mats) > 0:
+            ax.scatter(obs_mats, obs_yields * 100, color='black', zorder=5, s=40,
+                       label='GoC observed (BoC)' if base_params.get('live') else 'GoC fallback')
         ax.set_xlabel('Maturity (years)')
         ax.set_ylabel('Spot Rate (%)')
         ax.set_title('Nelson-Siegel Fitted Curve + Scenarios')
@@ -120,6 +130,11 @@ with tabs[0]:
         st.metric('β₂ (curvature)',f"{base_params['beta2']*100:.2f}%")
         st.metric('τ (decay)',     f"{base_params['tau']:.2f} yr")
         st.metric('Fit RMSE',      f"{base_params['rmse']*10000:.1f} bp")
+        if len(obs_mats) > 0:
+            st.divider()
+            st.caption('Observed yields (cc %)')
+            obs_df = pd.DataFrame({'Maturity': obs_mats, 'Yield (%)': (obs_yields * 100).round(3)})
+            st.dataframe(obs_df.set_index('Maturity'), use_container_width=True)
 
     st.divider()
     st.subheader('Selected Scenario: ' + selected_scenario)

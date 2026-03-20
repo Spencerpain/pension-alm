@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
+import requests
 
 
 # ── Nelson-Siegel model ───────────────────────────────────────────────────────
@@ -55,18 +56,91 @@ def spot_rate(maturity: float, params: dict) -> float:
     )[0])
 
 
-# ── Government of Canada representative yield curve ───────────────────────────
-# Approximate GoC nominal yield curve as of early 2024 (illustrative defaults).
-# Users can override by providing observed maturities and yields.
+# ── Government of Canada live yield curve ────────────────────────────────────
+# Live data from Bank of Canada Valet API.
+# Yields are quoted as annual % with semi-annual compounding (standard bond convention).
+# Converted to continuously compounded decimal for Nelson-Siegel fitting.
 
-GOC_MATURITIES = np.array([0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 20.0, 30.0])
-GOC_YIELDS = np.array([0.0490, 0.0488, 0.0468, 0.0430, 0.0415, 0.0390,
-                        0.0385, 0.0375, 0.0370, 0.0368])  # continuously compounded
+_BOC_SERIES = {
+    'TB.CDN.3MTH.DQ.YLD':  0.25,
+    'TB.CDN.6MTH.DQ.YLD':  0.50,
+    'TB.CDN.1YR.DQ.YLD':   1.0,
+    'BD.CDN.2YR.DQ.YLD':   2.0,
+    'BD.CDN.3YR.DQ.YLD':   3.0,
+    'BD.CDN.5YR.DQ.YLD':   5.0,
+    'BD.CDN.7YR.DQ.YLD':   7.0,
+    'BD.CDN.10YR.DQ.YLD':  10.0,
+    'BD.CDN.LONG.DQ.YLD':  30.0,
+}
+
+# Fallback hardcoded curve (approximate GoC yields, early 2024)
+_FALLBACK_MATURITIES = np.array([0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 30.0])
+_FALLBACK_YIELDS     = np.array([0.0490, 0.0488, 0.0468, 0.0430, 0.0415, 0.0390,
+                                  0.0385, 0.0375, 0.0368])
+
+GOC_MATURITIES = _FALLBACK_MATURITIES
+GOC_YIELDS     = _FALLBACK_YIELDS
+
+
+def _semi_annual_to_cc(rate_pct: float) -> float:
+    """Convert annual yield quoted with semi-annual compounding (%) to continuously compounded decimal."""
+    return 2.0 * np.log(1.0 + rate_pct / 200.0)
+
+
+def fetch_goc_yields() -> tuple[np.ndarray, np.ndarray, str]:
+    """
+    Fetch live Government of Canada benchmark yields from the Bank of Canada Valet API.
+
+    Returns
+    -------
+    maturities : np.ndarray — years to maturity
+    yields_cc  : np.ndarray — continuously compounded decimal yields
+    as_of      : str        — date of the data
+    """
+    series_str = ','.join(_BOC_SERIES.keys())
+    url = f'https://www.bankofcanada.ca/valet/observations/{series_str}/json?recent=5'
+
+    resp = requests.get(url, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+
+    # Walk back through recent observations to find the latest with all series populated
+    observations = data.get('observations', [])
+    for obs in reversed(observations):
+        maturities, yields_cc = [], []
+        for series, mat in _BOC_SERIES.items():
+            val = obs.get(series, {}).get('v')
+            if val is not None and val != '':
+                maturities.append(mat)
+                yields_cc.append(_semi_annual_to_cc(float(val)))
+        if len(maturities) >= 6:  # enough points to fit NS
+            as_of = obs.get('d', 'unknown')
+            return np.array(maturities), np.array(yields_cc), as_of
+
+    raise ValueError('No complete GoC yield observation found in recent data.')
 
 
 def default_goc_params() -> dict:
-    """Fit Nelson-Siegel to the representative GoC curve."""
-    return fit_nelson_siegel(GOC_MATURITIES, GOC_YIELDS)
+    """
+    Fit Nelson-Siegel to live GoC yields from Bank of Canada.
+    Falls back to hardcoded curve if the API is unavailable.
+    Returns params dict with an extra 'as_of' and 'live' key.
+    """
+    try:
+        mats, yields, as_of = fetch_goc_yields()
+        params = fit_nelson_siegel(mats, yields)
+        params['as_of'] = as_of
+        params['live']  = True
+        params['_maturities'] = mats
+        params['_yields']     = yields
+        return params
+    except Exception:
+        params = fit_nelson_siegel(_FALLBACK_MATURITIES, _FALLBACK_YIELDS)
+        params['as_of'] = 'Fallback (early 2024)'
+        params['live']  = False
+        params['_maturities'] = _FALLBACK_MATURITIES
+        params['_yields']     = _FALLBACK_YIELDS
+        return params
 
 
 # ── Scenario shocks ───────────────────────────────────────────────────────────

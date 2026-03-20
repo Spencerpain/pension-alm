@@ -2,4 +2,5 @@ numpy
 pandas
 scipy
 matplotlib
+requests
 streamlit>=1.32.0
